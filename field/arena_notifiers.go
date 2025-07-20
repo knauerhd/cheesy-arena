@@ -37,21 +37,23 @@ type MatchTimeMessage struct {
 }
 
 type audienceAllianceScoreFields struct {
-	Score                     *game.Score
-	ScoreSummary              *game.ScoreSummary
-	AmplifiedTimeRemainingSec int
+	Score        *game.Score
+	ScoreSummary *game.ScoreSummary
 }
 
 // Instantiates notifiers and configures their message producing methods.
 func (arena *Arena) configureNotifiers() {
 	arena.AllianceSelectionNotifier = websocket.NewNotifier("allianceSelection", arena.generateAllianceSelectionMessage)
-	arena.AllianceStationDisplayModeNotifier = websocket.NewNotifier("allianceStationDisplayMode",
-		arena.generateAllianceStationDisplayModeMessage)
+	arena.AllianceStationDisplayModeNotifier = websocket.NewNotifier(
+		"allianceStationDisplayMode", arena.generateAllianceStationDisplayModeMessage,
+	)
 	arena.ArenaStatusNotifier = websocket.NewNotifier("arenaStatus", arena.generateArenaStatusMessage)
-	arena.AudienceDisplayModeNotifier = websocket.NewNotifier("audienceDisplayMode",
-		arena.generateAudienceDisplayModeMessage)
-	arena.DisplayConfigurationNotifier = websocket.NewNotifier("displayConfiguration",
-		arena.generateDisplayConfigurationMessage)
+	arena.AudienceDisplayModeNotifier = websocket.NewNotifier(
+		"audienceDisplayMode", arena.generateAudienceDisplayModeMessage,
+	)
+	arena.DisplayConfigurationNotifier = websocket.NewNotifier(
+		"displayConfiguration", arena.generateDisplayConfigurationMessage,
+	)
 	arena.EventStatusNotifier = websocket.NewNotifier("eventStatus", arena.generateEventStatusMessage)
 	arena.LowerThirdNotifier = websocket.NewNotifier("lowerThird", arena.generateLowerThirdMessage)
 	arena.MatchLoadNotifier = websocket.NewNotifier("matchLoad", arena.GenerateMatchLoadMessage)
@@ -227,9 +229,9 @@ func (arena *Arena) GenerateScorePostedMessage() any {
 	blueRankingPoints := blueScoreSummary.BonusRankingPoints
 	switch arena.SavedMatch.Status {
 	case game.RedWonMatch:
-		redRankingPoints += 2
+		redRankingPoints += 3
 	case game.BlueWonMatch:
-		blueRankingPoints += 2
+		blueRankingPoints += 3
 	case game.TieMatch:
 		redRankingPoints++
 		blueRankingPoints++
@@ -287,6 +289,7 @@ func (arena *Arena) GenerateScorePostedMessage() any {
 		BlueWins            int
 		RedDestination      string
 		BlueDestination     string
+		CoopertitionEnabled bool
 	}{
 		arena.SavedMatch,
 		redScoreSummary,
@@ -308,31 +311,46 @@ func (arena *Arena) GenerateScorePostedMessage() any {
 		blueWins,
 		redDestination,
 		blueDestination,
+		game.CoralBonusCoopEnabled,
 	}
 }
 
 func (arena *Arena) generateScoringStatusMessage() any {
+	type positionStatus struct {
+		Ready          bool
+		NumPanels      int
+		NumPanelsReady int
+	}
+	getStatusForPosition := func(position string) positionStatus {
+		return positionStatus{
+			Ready:          arena.positionPostMatchScoreReady(position),
+			NumPanels:      arena.ScoringPanelRegistry.GetNumPanels(position),
+			NumPanelsReady: arena.GetNumScoreCommitted(position),
+		}
+	}
+
 	return &struct {
-		RefereeScoreReady         bool
-		RedScoreReady             bool
-		BlueScoreReady            bool
-		NumRedScoringPanels       int
-		NumRedScoringPanelsReady  int
-		NumBlueScoringPanels      int
-		NumBlueScoringPanelsReady int
-	}{arena.RedRealtimeScore.FoulsCommitted && arena.BlueRealtimeScore.FoulsCommitted,
-		arena.alliancePostMatchScoreReady("red"), arena.alliancePostMatchScoreReady("blue"),
-		arena.ScoringPanelRegistry.GetNumPanels("red"), arena.ScoringPanelRegistry.GetNumScoreCommitted("red"),
-		arena.ScoringPanelRegistry.GetNumPanels("blue"), arena.ScoringPanelRegistry.GetNumScoreCommitted("blue")}
+		RefereeScoreReady bool
+		PositionStatuses  map[string]positionStatus
+	}{
+		arena.RedRealtimeScore.FoulsCommitted && arena.BlueRealtimeScore.FoulsCommitted,
+		map[string]positionStatus{
+			"red_near":  getStatusForPosition("red_near"),
+			"red_far":   getStatusForPosition("red_far"),
+			"blue_near": getStatusForPosition("blue_near"),
+			"blue_far":  getStatusForPosition("blue_far"),
+		},
+	}
 }
 
 // Constructs the data object for one alliance sent to the audience display for the realtime scoring overlay.
-func getAudienceAllianceScoreFields(allianceScore *RealtimeScore,
-	allianceScoreSummary *game.ScoreSummary) *audienceAllianceScoreFields {
+func getAudienceAllianceScoreFields(
+	allianceScore *RealtimeScore,
+	allianceScoreSummary *game.ScoreSummary,
+) *audienceAllianceScoreFields {
 	fields := new(audienceAllianceScoreFields)
 	fields.Score = &allianceScore.CurrentScore
 	fields.ScoreSummary = allianceScoreSummary
-	fields.AmplifiedTimeRemainingSec = allianceScore.AmplifiedTimeRemainingSec
 	return fields
 }
 

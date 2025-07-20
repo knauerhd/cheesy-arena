@@ -8,10 +8,7 @@ package game
 import "time"
 
 const (
-	speakerAutoGracePeriodSec      = 3
-	SpeakerTeleopGracePeriodSec    = 5
-	speakerAmplifiedGracePeriodSec = 3
-	coopTeleopWindowSec            = 45
+	TeleopGracePeriodSec = 3
 )
 
 var MatchTiming = struct {
@@ -28,11 +25,14 @@ func GetDurationToAutoEnd() time.Duration {
 }
 
 func GetDurationToTeleopStart() time.Duration {
-	return time.Duration(MatchTiming.WarmupDurationSec+MatchTiming.AutoDurationSec+MatchTiming.PauseDurationSec) *
-		time.Second
+	return time.Duration(
+		MatchTiming.WarmupDurationSec+MatchTiming.AutoDurationSec+MatchTiming.PauseDurationSec,
+	) * time.Second
 }
 
 func GetDurationToTeleopEnd() time.Duration {
-	return time.Duration(MatchTiming.WarmupDurationSec+MatchTiming.AutoDurationSec+MatchTiming.PauseDurationSec+
-		MatchTiming.TeleopDurationSec) * time.Second
+	return time.Duration(
+		MatchTiming.WarmupDurationSec+MatchTiming.AutoDurationSec+MatchTiming.PauseDurationSec+
+			MatchTiming.TeleopDurationSec,
+	) * time.Second
 }
