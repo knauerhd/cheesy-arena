@@ -10,6 +10,8 @@ import (
 	"log"
 	"reflect"
 	"strconv"
+	"strings"
+	"sync"
 	"time"
 
 	"github.com/Team254/cheesy-arena/game"
@@ -54,10 +56,13 @@ type Arena struct {
 	EventSettings    *model.EventSettings
 	accessPoint      network.AccessPoint
 	networkSwitch    *network.Switch
+	redSCC           *network.SCCSwitch
+	blueSCC          *network.SCCSwitch
 	Plc              plc.Plc
 	TbaClient        *partner.TbaClient
 	NexusClient      *partner.NexusClient
 	BlackmagicClient *partner.BlackmagicClient
+	CompanionClient  *partner.CompanionClient
 	AllianceStations map[string]*AllianceStation
 	Displays         map[string]*Display
 	TeamSigns        *TeamSigns
@@ -92,6 +97,7 @@ type Arena struct {
 	soundsPlayed                      map[*game.MatchSound]struct{}
 	breakDescription                  string
 	preloadedTeams                    *[6]*model.Team
+	NextFoulId                        int
 }
 
 type AllianceStation struct {
@@ -183,10 +189,80 @@ func (arena *Arena) LoadSettings() error {
 		accessPointWifiStatuses,
 	)
 	arena.networkSwitch = network.NewSwitch(settings.SwitchAddress, settings.SwitchPassword)
+	sccUpCommands := strings.Split(settings.SCCUpCommands, "\n")
+	sccDownCommands := strings.Split(settings.SCCDownCommands, "\n")
+	arena.redSCC = network.NewSCCSwitch(
+		settings.RedSCCAddress,
+		settings.SCCUsername,
+		settings.SCCPassword,
+		sccUpCommands,
+		sccDownCommands,
+	)
+	arena.blueSCC = network.NewSCCSwitch(
+		settings.BlueSCCAddress,
+		settings.SCCUsername,
+		settings.SCCPassword,
+		sccUpCommands,
+		sccDownCommands,
+	)
 	arena.Plc.SetAddress(settings.PlcAddress)
 	arena.TbaClient = partner.NewTbaClient(settings.TbaEventCode, settings.TbaSecretId, settings.TbaSecret)
 	arena.NexusClient = partner.NewNexusClient(settings.TbaEventCode)
 	arena.BlackmagicClient = partner.NewBlackmagicClient(settings.BlackmagicAddresses)
+
+	// Initialize Companion client with event configurations
+	companionEventConfigs := map[partner.CompanionEvent]partner.CompanionEventConfig{
+		partner.EventMatchPreview: {
+			Page:   settings.CompanionMatchPreviewPage,
+			Row:    settings.CompanionMatchPreviewRow,
+			Column: settings.CompanionMatchPreviewColumn,
+		},
+		partner.EventShowOverlay: {
+			Page:   settings.CompanionSetAudiencePage,
+			Row:    settings.CompanionSetAudienceRow,
+			Column: settings.CompanionSetAudienceColumn,
+		},
+		partner.EventMatchStart: {
+			Page:   settings.CompanionMatchStartPage,
+			Row:    settings.CompanionMatchStartRow,
+			Column: settings.CompanionMatchStartColumn,
+		},
+		partner.EventTeleopStart: {
+			Page:   settings.CompanionTeleopStartPage,
+			Row:    settings.CompanionTeleopStartRow,
+			Column: settings.CompanionTeleopStartColumn,
+		},
+		partner.EventEndgameStart: {
+			Page:   settings.CompanionEndgameStartPage,
+			Row:    settings.CompanionEndgameStartRow,
+			Column: settings.CompanionEndgameStartColumn,
+		},
+		partner.EventMatchEnd: {
+			Page:   settings.CompanionMatchEndPage,
+			Row:    settings.CompanionMatchEndRow,
+			Column: settings.CompanionMatchEndColumn,
+		},
+		partner.EventShowFinalScore: {
+			Page:   settings.CompanionPostResultPage,
+			Row:    settings.CompanionPostResultRow,
+			Column: settings.CompanionPostResultColumn,
+		},
+		partner.EventAllianceSelection: {
+			Page:   settings.CompanionAllianceSelectionPage,
+			Row:    settings.CompanionAllianceSelectionRow,
+			Column: settings.CompanionAllianceSelectionColumn,
+		},
+		partner.EventMatchAbort: {
+			Page:   settings.CompanionMatchAbortPage,
+			Row:    settings.CompanionMatchAbortRow,
+			Column: settings.CompanionMatchAbortColumn,
+		},
+	}
+	arena.CompanionClient = partner.NewCompanionClient(
+		settings.CompanionAddress,
+		settings.CompanionPort,
+		companionEventConfigs,
+	)
 
 	game.MatchTiming.WarmupDurationSec = settings.WarmupDurationSec
 	game.MatchTiming.AutoDurationSec = settings.AutoDurationSec
@@ -200,6 +276,7 @@ func (arena *Arena) LoadSettings() error {
 	game.CoralBonusPerLevelThreshold = settings.CoralBonusPerLevelThreshold
 	game.CoralBonusCoopEnabled = settings.CoralBonusCoopEnabled
 	game.BargeBonusPointThreshold = settings.BargeBonusPointThreshold
+	game.IncludeAlgaeInBargeBonus = settings.IncludeAlgaeInBargeBonus
 
 	// Reconstruct the playoff tournament in memory.
 	if err = arena.CreatePlayoffTournament(); err != nil {
@@ -310,6 +387,7 @@ func (arena *Arena) LoadMatch(match *model.Match) error {
 	arena.BlueRealtimeScore = NewRealtimeScore()
 	arena.ScoringPanelRegistry.resetScoreCommitted()
 	arena.Plc.ResetMatch()
+	arena.NextFoulId = 1
 
 	// Notify any listeners about the new match.
 	arena.MatchLoadNotifier.Notify()
@@ -470,6 +548,7 @@ func (arena *Arena) AbortMatch() error {
 	arena.AudienceDisplayMode = "blank"
 	arena.AudienceDisplayModeNotifier.Notify()
 	go arena.BlackmagicClient.StopRecording()
+	go arena.CompanionClient.SendEvent(partner.EventMatchAbort)
 	return nil
 }
 
@@ -520,6 +599,13 @@ func (arena *Arena) SetAudienceDisplayMode(mode string) {
 		arena.AudienceDisplayModeNotifier.Notify()
 		if mode == "score" {
 			arena.PlaySound("match_result")
+			go arena.CompanionClient.SendEvent(partner.EventShowFinalScore)
+		} else if mode == "allianceSelection" {
+			go arena.CompanionClient.SendEvent(partner.EventAllianceSelection)
+		} else if mode == "intro" {
+			go arena.CompanionClient.SendEvent(partner.EventMatchPreview)
+		} else if mode == "match" {
+			go arena.CompanionClient.SendEvent(partner.EventShowOverlay)
 		}
 	}
 }
@@ -562,6 +648,7 @@ func (arena *Arena) Update() {
 		arena.AllianceStationDisplayMode = "match"
 		arena.AllianceStationDisplayModeNotifier.Notify()
 		go arena.BlackmagicClient.StartRecording()
+		go arena.CompanionClient.SendEvent(partner.EventMatchStart)
 		if game.MatchTiming.WarmupDurationSec > 0 {
 			arena.MatchState = WarmupPeriod
 			enabled = false
@@ -595,6 +682,7 @@ func (arena *Arena) Update() {
 			} else {
 				arena.MatchState = TeleopPeriod
 				enabled = true
+				go arena.CompanionClient.SendEvent(partner.EventTeleopStart)
 			}
 		}
 	case PausePeriod:
@@ -605,6 +693,7 @@ func (arena *Arena) Update() {
 			auto = false
 			enabled = true
 			sendDsPacket = true
+			go arena.CompanionClient.SendEvent(partner.EventTeleopStart)
 		}
 	case TeleopPeriod:
 		auto = false
@@ -615,6 +704,7 @@ func (arena *Arena) Update() {
 			enabled = false
 			sendDsPacket = true
 			go arena.BlackmagicClient.StopRecording()
+			go arena.CompanionClient.SendEvent(partner.EventMatchEnd)
 			go func() {
 				// Leave the scores on the screen briefly at the end of the match.
 				time.Sleep(time.Second * matchEndScoreDwellSec)
@@ -660,6 +750,9 @@ func (arena *Arena) Update() {
 		arena.ArenaStatusNotifier.Notify()
 	}
 
+	// Handle the Companion EndGameStart event.
+	arena.checkEndgameStart(matchTimeSec)
+
 	arena.handleSounds(matchTimeSec)
 
 	// Handle field sensors/lights/actuators.
@@ -670,6 +763,25 @@ func (arena *Arena) Update() {
 
 	arena.LastMatchTimeSec = matchTimeSec
 	arena.lastMatchState = arena.MatchState
+}
+
+// Checks if the endgame warning period has started and triggers the Companion event if so.
+func (arena *Arena) checkEndgameStart(matchTimeSec float64) {
+	// Only check during teleop period
+	if arena.MatchState != TeleopPeriod {
+		return
+	}
+
+	// Calculate the time when endgame warning should start
+	endgameStartTime := float64(
+		game.MatchTiming.AutoDurationSec + game.MatchTiming.PauseDurationSec +
+			game.MatchTiming.TeleopDurationSec - game.MatchTiming.WarningRemainingDurationSec,
+	)
+
+	// Check if we've crossed the endgame threshold and haven't already triggered it
+	if matchTimeSec >= endgameStartTime && arena.LastMatchTimeSec < endgameStartTime {
+		go arena.CompanionClient.SendEvent(partner.EventEndgameStart)
+	}
 }
 
 // Loops indefinitely to track and update the arena components.
@@ -818,7 +930,26 @@ func (arena *Arena) preLoadNextMatch() {
 		}
 	}
 	arena.setupNetwork(teams, true)
-	arena.TeamSigns.SetNextMatchTeams(nextMatch)
+	arena.TeamSigns.SetNextMatchTeams(teamIds)
+}
+
+// Enable or disable the team ethernet ports on both SCCs
+func (arena *Arena) setSCCEthernetEnabled(enabled bool) {
+	if arena.EventSettings.SCCManagementEnabled {
+		var wg sync.WaitGroup
+		wg.Add(2)
+
+		configureSCC := func(scc *network.SCCSwitch, name string) {
+			defer wg.Done()
+			err := scc.SetTeamEthernetEnabled(enabled)
+			if err != nil {
+				log.Printf("Failed to set %s SCC enabled state to %t: %s", name, enabled, err.Error())
+			}
+		}
+		go configureSCC(arena.redSCC, "red")
+		go configureSCC(arena.blueSCC, "blue")
+		wg.Wait()
+	}
 }
 
 // Asynchronously reconfigures the networking hardware for the new set of teams.
@@ -839,9 +970,11 @@ func (arena *Arena) setupNetwork(teams [6]*model.Team, isPreload bool) {
 			log.Printf("Failed to configure team WiFi: %s", err.Error())
 		}
 		go func() {
+			arena.setSCCEthernetEnabled(false)
 			if err := arena.networkSwitch.ConfigureTeamEthernet(teams); err != nil {
 				log.Printf("Failed to configure team Ethernet: %s", err.Error())
 			}
+			arena.setSCCEthernetEnabled(true)
 		}()
 	}
 }

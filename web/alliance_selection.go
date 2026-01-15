@@ -20,6 +20,12 @@ import (
 // Global var to hold configurable time limit for selections. A value of zero disables the timer.
 var allianceSelectionTimeLimitSec = 45
 
+// Global var to hold the time limit that the current timer was started with
+var currentAllianceSelectionTimeLimitSec = 0
+
+// The time limit for the break between rounds
+const allianceSelectionBreakDurationSec = 120
+
 // Global var to hold a ticker used for the alliance selection timer.
 var allianceSelectionTicker *time.Ticker
 
@@ -87,12 +93,6 @@ func (web *Web) allianceSelectionPostHandler(w http.ResponseWriter, r *http.Requ
 				}
 			}
 		}
-	}
-
-	if allianceSelectionTicker != nil {
-		allianceSelectionTicker.Stop()
-		web.arena.AllianceSelectionShowTimer = false
-		web.arena.AllianceSelectionTimeRemainingSec = 0
 	}
 
 	web.arena.AllianceSelectionNotifier.Notify()
@@ -277,7 +277,7 @@ func (web *Web) allianceSelectionWebsocketHandler(w http.ResponseWriter, r *http
 	defer ws.Close()
 
 	// Subscribe the websocket to the notifiers whose messages will be passed on to the client, in a separate goroutine.
-	go ws.HandleNotifiers(web.arena.AllianceSelectionNotifier)
+	go ws.HandleNotifiers(web.arena.AllianceSelectionNotifier, web.arena.AudienceDisplayModeNotifier)
 
 	// Loop, waiting for commands and responding to them, until the client closes the connection.
 	for {
@@ -299,29 +299,59 @@ func (web *Web) allianceSelectionWebsocketHandler(w http.ResponseWriter, r *http
 				ws.WriteError("Invalid time limit value.")
 			}
 		case "startTimer":
-			if !web.arena.AllianceSelectionShowTimer {
-				web.arena.AllianceSelectionShowTimer = true
+			if allianceSelectionTicker != nil {
+				allianceSelectionTicker.Stop()
+			}
+			if web.arena.AllianceSelectionTimeRemainingSec == 0 {
 				web.arena.AllianceSelectionTimeRemainingSec = allianceSelectionTimeLimitSec
-				web.arena.AllianceSelectionNotifier.Notify()
-				allianceSelectionTicker = time.NewTicker(time.Second)
-				go func() {
-					for range allianceSelectionTicker.C {
-						web.arena.AllianceSelectionTimeRemainingSec--
-						web.arena.AllianceSelectionNotifier.Notify()
+				currentAllianceSelectionTimeLimitSec = allianceSelectionTimeLimitSec
+			}
+			web.arena.AllianceSelectionShowTimer = true
+			web.arena.AllianceSelectionNotifier.Notify()
+			allianceSelectionTicker = time.NewTicker(time.Second)
+			go func() {
+				for range allianceSelectionTicker.C {
+					web.arena.AllianceSelectionTimeRemainingSec--
+					web.arena.AllianceSelectionNotifier.Notify()
+
+					if web.arena.AllianceSelectionTimeRemainingSec <= 0 {
+						allianceSelectionTicker.Stop()
+					}
+
+					// Only play sounds if we are not in a break between rounds
+					if currentAllianceSelectionTimeLimitSec != allianceSelectionBreakDurationSec {
 						if web.arena.AllianceSelectionTimeRemainingSec == 5 {
 							web.arena.PlaySound("pick_clock")
 						} else if web.arena.AllianceSelectionTimeRemainingSec == 0 {
-							allianceSelectionTicker.Stop()
 							web.arena.PlaySound("pick_clock_expired")
 						}
 					}
-				}()
-			}
+				}
+			}()
 		case "stopTimer":
-			allianceSelectionTicker.Stop()
+			if allianceSelectionTicker != nil {
+				allianceSelectionTicker.Stop()
+			}
+			web.arena.AllianceSelectionNotifier.Notify()
+		case "restartTimer":
+			web.arena.AllianceSelectionShowTimer = true
+			web.arena.AllianceSelectionTimeRemainingSec = allianceSelectionTimeLimitSec
+			currentAllianceSelectionTimeLimitSec = allianceSelectionTimeLimitSec
+			web.arena.AllianceSelectionNotifier.Notify()
+		case "hideTimer":
+			if allianceSelectionTicker != nil {
+				allianceSelectionTicker.Stop()
+			}
 			web.arena.AllianceSelectionShowTimer = false
 			web.arena.AllianceSelectionTimeRemainingSec = 0
 			web.arena.AllianceSelectionNotifier.Notify()
+		case "setAudienceDisplay":
+			mode, ok := data.(string)
+			if !ok {
+				ws.WriteError(fmt.Sprintf("Failed to parse '%s' message.", messageType))
+				continue
+			}
+			web.arena.SetAudienceDisplayMode(mode)
 		default:
 			ws.WriteError(fmt.Sprintf("Invalid message type '%s'.", messageType))
 		}
@@ -340,7 +370,9 @@ func (web *Web) renderAllianceSelection(w http.ResponseWriter, r *http.Request, 
 		}
 	}
 
-	template, err := web.parseFiles("templates/alliance_selection.html", "templates/base.html")
+	template, err := web.parseFiles(
+		"templates/alliance_selection.html", "templates/audience_display_radio_buttons.html", "templates/base.html",
+	)
 	if err != nil {
 		handleWebErr(w, err)
 		return

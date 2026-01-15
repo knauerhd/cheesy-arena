@@ -4,13 +4,14 @@
 package web
 
 import (
+	"testing"
+
 	"github.com/Team254/cheesy-arena/game"
 	"github.com/Team254/cheesy-arena/model"
 	"github.com/Team254/cheesy-arena/websocket"
 	gorillawebsocket "github.com/gorilla/websocket"
 	"github.com/mitchellh/mapstructure"
 	"github.com/stretchr/testify/assert"
-	"testing"
 )
 
 func TestAllianceSelection(t *testing.T) {
@@ -325,8 +326,9 @@ func TestAllianceSelectionWebsocket(t *testing.T) {
 	defer conn.Close()
 	ws := websocket.NewTestWebsocket(conn)
 
-	// Should get a status update right after connection.
+	// Should get a few status updates right after connection.
 	readWebsocketType(t, ws, "allianceSelection")
+	readWebsocketType(t, ws, "audienceDisplayMode")
 
 	// Test starting and stopping the timer.
 	allianceSelectionMessage := struct {
@@ -337,8 +339,11 @@ func TestAllianceSelectionWebsocket(t *testing.T) {
 	assert.Equal(t, true, allianceSelectionMessage.ShowTimer)
 	ws.Write("stopTimer", nil)
 	assert.Nil(t, mapstructure.Decode(readWebsocketType(t, ws, "allianceSelection"), &allianceSelectionMessage))
+	assert.Equal(t, true, allianceSelectionMessage.ShowTimer)
+	ws.Write("hideTimer", nil)
+	assert.Nil(t, mapstructure.Decode(readWebsocketType(t, ws, "allianceSelection"), &allianceSelectionMessage))
 	assert.Equal(t, false, allianceSelectionMessage.ShowTimer)
-	ws.Write("startTimer", nil)
+	ws.Write("restartTimer", nil)
 	assert.Nil(t, mapstructure.Decode(readWebsocketType(t, ws, "allianceSelection"), &allianceSelectionMessage))
 	assert.Equal(t, true, allianceSelectionMessage.ShowTimer)
 }
