@@ -7,8 +7,7 @@ jobs:
   create_release:
     runs-on: ubuntu-latest
     env:
-      ASSET_FILES: LICENSE README.md  fix_avatar_colors_for_overlay font schedules static
-        switch_config.txt templates tunnel #access_point_config.tar.gz
+      ASSET_FILES: LICENSE README.md fix_avatar_colors_for_overlay font schedules static switch_config.txt templates tunnel #access_point_config.tar.gz
     steps:
       - name: Install Go
         uses: actions/setup-go@v2
@@ -26,19 +25,19 @@ jobs:
         with:
           tag_name: ${{ github.ref }}
           release_name: Cheesy Arena ${{ github.ref }}
-          body: This is a release of Cheesy Arena for the 2025 FRC game, REEFSCAPE. Download the version for your
-            operating system below. Supported operating systems are Linux, macOS (x64 and M1), and Windows.
+          body: This is a release of Cheesy Arena for the 2025 FRC game, REEFSCAPE. Download the version for your operating system below. Supported operating systems are Linux (x64 and ARM64), macOS (x64 and M1), and Windows.
           draft: false
           prerelease: false
 
       - name: Set additional environment variables
         run: |
           echo "LINUX_X64_FILENAME=cheesy-arena.${GITHUB_REF:10}.linux.x64.zip" >> $GITHUB_ENV
+          echo "LINUX_ARM64_FILENAME=cheesy-arena.${GITHUB_REF:10}.linux.arm64.zip" >> $GITHUB_ENV
           echo "MACOS_X64_FILENAME=cheesy-arena.${GITHUB_REF:10}.macos.x64.zip" >> $GITHUB_ENV
           echo "MACOS_M1_FILENAME=cheesy-arena.${GITHUB_REF:10}.macos.m1.zip" >> $GITHUB_ENV
           echo "WINDOWS_X64_FILENAME=cheesy-arena.${GITHUB_REF:10}.windows.x64.zip" >> $GITHUB_ENV
 
-      - name: Build Linux bundle
+      - name: Build Linux x64 bundle
         run: |
           rm -rf cheesy-arena*
           mkdir cheesy-arena
@@ -46,7 +45,7 @@ jobs:
           cp -r ${{ env.ASSET_FILES }} cheesy-arena/
           zip -r -X ${{ env.LINUX_X64_FILENAME }} cheesy-arena
 
-      - name: Upload Linux bundle
+      - name: Upload Linux x64 bundle
         uses: actions/upload-release-asset@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -54,6 +53,24 @@ jobs:
           upload_url: ${{ steps.create_release.outputs.upload_url }}
           asset_path: ./${{ env.LINUX_X64_FILENAME }}
           asset_name: ${{ env.LINUX_X64_FILENAME }}
+          asset_content_type: application/zip
+
+      - name: Build Linux ARM64 bundle
+        run: |
+          rm -rf cheesy-arena*
+          mkdir cheesy-arena
+          GOOS=linux GOARCH=arm64 go build -o cheesy-arena/
+          cp -r ${{ env.ASSET_FILES }} cheesy-arena/
+          zip -r -X ${{ env.LINUX_ARM64_FILENAME }} cheesy-arena
+
+      - name: Upload Linux ARM64 bundle
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: ./${{ env.LINUX_ARM64_FILENAME }}
+          asset_name: ${{ env.LINUX_ARM64_FILENAME }}
           asset_content_type: application/zip
 
       - name: Build MacOS x64 bundle
@@ -109,3 +126,35 @@ jobs:
           asset_path: ./${{ env.WINDOWS_X64_FILENAME }}
           asset_name: ${{ env.WINDOWS_X64_FILENAME }}
           asset_content_type: application/zip
+  publish_docker:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v2
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=sha
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
