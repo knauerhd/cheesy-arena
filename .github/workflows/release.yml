@@ -6,6 +6,9 @@ name: Create Release
 jobs:
   create_release:
     runs-on: ubuntu-latest
+    # THIS SECTION FIXES THE "Resource not accessible" ERROR
+    permissions:
+      contents: write
     env:
       ASSET_FILES: LICENSE README.md fix_avatar_colors_for_overlay font schedules static switch_config.txt templates tunnel #access_point_config.tar.gz
     steps:
